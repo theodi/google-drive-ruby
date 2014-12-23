@@ -32,8 +32,13 @@ module GoogleDrive
 
         UPLOAD_CHUNK_SIZE = 512 * 1024
         
+        # DEPRECATED: Will be removed in the next version.
+        #
         # The same as GoogleDrive.login.
         def self.login(mail, password, proxy = nil)
+          warn(
+              "WARNING: GoogleDrive.login is deprecated and will be removed in the next version. " +
+              "Use GoogleDrive.login_with_oauth instead.")
           session = Session.new(nil, ClientLoginFetcher.new({}, proxy))
           session.login(mail, password)
           return session
@@ -41,8 +46,16 @@ module GoogleDrive
 
         # The same as GoogleDrive.login_with_oauth.
         def self.login_with_oauth(access_token, proxy = nil)
+          if proxy
+            warn(
+              "WARNING: Specifying a proxy object is deprecated and will not work in the next version. " +
+              "Set ENV[\"http_proxy\"] instead.")
+          end
           case access_token
             when OAuth::AccessToken
+              warn(
+                "WARNING: Authorization with OAuth1 is deprecated and will not work in the next version. " +
+                "Use OAuth2 instead.")
               raise(GoogleDrive::Error, "proxy is not supported with OAuth1.") if proxy
               fetcher = OAuth1Fetcher.new(access_token)
             when OAuth2::AccessToken
@@ -58,6 +71,9 @@ module GoogleDrive
 
         # The same as GoogleDrive.restore_session.
         def self.restore_session(auth_tokens, proxy = nil)
+          warn(
+              "WARNING: GoogleDrive.restore_session is deprecated and will be removed in the next version. " +
+              "Use GoogleDrive.login_with_oauth instead.")
           return Session.new(auth_tokens, nil, proxy)
         end
         
@@ -96,6 +112,8 @@ module GoogleDrive
 
         # Authentication tokens.
         def auth_tokens
+          warn(
+              "WARNING: GoogleDrive::Session\#auth_tokens is deprecated and will be removed in the next version.")
           if !@fetcher.is_a?(ClientLoginFetcher)
             raise(GoogleDrive::Error,
                 "Cannot call auth_tokens for session created by " +
@@ -106,12 +124,24 @@ module GoogleDrive
 
         # Authentication token.
         def auth_token(auth = :wise)
+          warn(
+              "WARNING: GoogleDrive::Session\#auth_token is deprecated and will be removed in the next version.")
           return self.auth_tokens[auth]
         end
 
         # Proc or Method called when authentication has failed.
         # When this function returns +true+, it tries again.
-        attr_accessor :on_auth_fail
+        def on_auth_fail
+          warn(
+              "WARNING: GoogleDrive::Session\#on_auth_fail is deprecated and will be removed in the next version.")
+          return @on_auth_fail
+        end
+
+        def on_auth_fail=(func)
+          warn(
+              "WARNING: GoogleDrive::Session\#on_auth_fail is deprecated and will be removed in the next version.")
+          @on_auth_fail = func
+        end
 
         # Returns list of files for the user as array of GoogleDrive::File or its subclass.
         # You can specify query parameters described at
@@ -151,17 +181,14 @@ module GoogleDrive
         #   session.spreadsheets("title" => "hoge")
         #   session.spreadsheets("title" => "hoge", "title-exact" => "true")
         def spreadsheets(params = {})
-          query = encode_query(params)
-          doc = request(
-              :get, "https://spreadsheets.google.com/feeds/spreadsheets/private/full?#{query}")
-          result = []
-          doc.css("feed > entry").each() do |entry|
-            title = entry.css("title").text
-            url = entry.css(
-              "link[rel='http://schemas.google.com/spreadsheets/2006#worksheetsfeed']")[0]["href"]
-            result.push(Spreadsheet.new(self, url, title))
-          end
-          return result
+          url = concat_url(
+              "#{DOCS_BASE_URL}/-/spreadsheet?v=3", "?" + encode_query(params))
+          doc = request(:get, url, :auth => :writely)
+          # The API may return non-spreadsheets too when title-exact is specified.
+          # Probably a bug. For workaround, only returns Spreadsheet instances.
+          return doc.css("feed > entry").
+              map(){ |e| entry_element_to_file(e) }.
+              select(){ |f| f.is_a?(Spreadsheet) }
         end
 
         # Returns GoogleDrive::Spreadsheet with given +key+.
@@ -187,10 +214,14 @@ module GoogleDrive
         def spreadsheet_by_url(url)
           # Tries to parse it as URL of human-readable spreadsheet.
           uri = URI.parse(url)
-          if ["spreadsheets.google.com", "docs.google.com"].include?(uri.host) &&
-              uri.path =~ /\/ccc$/
-            if (uri.query || "").split(/&/).find(){ |s| s=~ /^key=(.*)$/ }
-              return spreadsheet_by_key($1)
+          if ["spreadsheets.google.com", "docs.google.com"].include?(uri.host)
+            case uri.path
+              when /\/d\/([^\/]+)/
+                return spreadsheet_by_key($1)
+              when /\/ccc$/
+                if (uri.query || "").split(/&/).find(){ |s| s=~ /^key=(.*)$/ }
+                  return spreadsheet_by_key($1)
+                end
             end
           end
           # Assumes the URL is worksheets feed URL.
@@ -362,7 +393,7 @@ module GoogleDrive
           EOS
           
           default_initial_header = {
-              "Content-Type" => "application/atom+xml",
+              "Content-Type" => "application/atom+xml;charset=utf-8",
               "X-Upload-Content-Type" => content_type,
               "X-Upload-Content-Length" => total_bytes.to_s(),
           }
@@ -426,7 +457,7 @@ module GoogleDrive
           if params[:header]
             extra_header = params[:header]
           elsif data
-            extra_header = {"Content-Type" => "application/atom+xml"}
+            extra_header = {"Content-Type" => "application/atom+xml;charset=utf-8"}
           else
             extra_header = {}
           end
