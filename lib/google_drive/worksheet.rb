@@ -20,7 +20,7 @@ module GoogleDrive
         include(Util)
 
         def initialize(session, spreadsheet, worksheet_feed_entry) #:nodoc:
-          
+
           @session = session
           @spreadsheet = spreadsheet
           set_worksheet_feed_entry(worksheet_feed_entry)
@@ -30,7 +30,7 @@ module GoogleDrive
           @numeric_values = nil
           @modified = Set.new()
           @list = nil
-          
+
         end
 
         # Nokogiri::XML::Element object of the <entry> element in a worksheets feed.
@@ -101,12 +101,16 @@ module GoogleDrive
         #   worksheet[2, 1]  #=> "hoge"
         #   worksheet["A2"]  #=> "hoge"
         def [](*args)
-          (row, col) = parse_cell_args(args)
-          return self.cells[[row, col]] || ""
+          if args[0] =~ /^[A-Z]+[0-9]+:[A-Z]+[0-9]+$/
+            parse_range(*args).map{ |cell| send(:[], cell) }
+          else
+            (row, col) = parse_cell_args(args)
+            return self.cells[[row, col]] || ""
+          end
         end
 
         # Updates content of the cell.
-        # Arguments in the bracket must be either (row number, column number) or cell name. 
+        # Arguments in the bracket must be either (row number, column number) or cell name.
         # Note that update is not sent to the server until you call save().
         # Top-left cell is [1, 1].
         #
@@ -176,7 +180,7 @@ module GoogleDrive
           reload_cells() if !@cells
           return @numeric_values[[row, col]]
         end
-        
+
         # Row number of the bottom-most non-empty row.
         def num_rows
           reload_cells() if !@cells
@@ -255,7 +259,7 @@ module GoogleDrive
 
         # Saves your changes made by []=, etc. to the server.
         def save()
-          
+
           sent = false
 
           if @meta_modified
@@ -345,9 +349,9 @@ module GoogleDrive
             sent = true
 
           end
-          
+
           return sent
-          
+
         end
 
         # Calls save() and reload().
@@ -375,7 +379,7 @@ module GoogleDrive
         # See this document for details:
         # http://code.google.com/intl/en/apis/spreadsheets/docs/3.0/developers_guide_protocol.html#TableFeeds
         def add_table(table_title, summary, columns, options)
-          
+
           warn(
               "DEPRECATED: Google Spreadsheet Table and Record feeds are deprecated and they " +
               "will not be available after March 2012.")
@@ -402,7 +406,7 @@ module GoogleDrive
 
           result = @session.request(:post, self.spreadsheet.tables_feed_url, :data => xml)
           return Table.new(@session, result)
-          
+
         end
 
         # DEPRECATED: Table and Record feeds are deprecated and they will not be available after
@@ -421,7 +425,7 @@ module GoogleDrive
           return @worksheet_feed_entry.css(
             "link[rel='http://schemas.google.com/spreadsheets/2006#listfeed']")[0]["href"]
         end
-        
+
         # Provides access to cells using column names, assuming the first row contains column
         # names. Returned object is GoogleDrive::List which you can use mostly as
         # Array of Hash.
@@ -437,7 +441,7 @@ module GoogleDrive
         def list
           return @list ||= List.new(self)
         end
-        
+
         # Returns a [row, col] pair for a cell name string.
         # e.g.
         #   worksheet.cell_name_to_row_col("C2")  #=> [2, 3]
@@ -464,7 +468,7 @@ module GoogleDrive
           fields[:title] = @title if @title
           return "\#<%p %s>" % [self.class, fields.map(){ |k, v| "%s=%p" % [k, v] }.join(", ")]
         end
-        
+
       private
 
         def set_worksheet_feed_entry(entry)
@@ -475,7 +479,7 @@ module GoogleDrive
         end
 
         def reload_cells()
-          
+
           doc = @session.request(:get, self.cells_feed_url)
           @max_rows = doc.css("gs|rowCount").text.to_i()
           @max_cols = doc.css("gs|colCount").text.to_i()
@@ -511,10 +515,32 @@ module GoogleDrive
             end
           else
             raise(ArgumentError,
-                "Arguments must be either one String or two Integer's, but are %p" % [args])
+                "Arguments must be either one String or two Integers, but are %p" % [args])
           end
         end
-        
+
+       def parse_range(*args)
+        return [] unless args.size == 1 && args[0].is_a?(String)
+
+        if parts = args[0].match(/^([A-Z]+)([0-9]+):([A-Z]+)([0-9]+)$/)
+          cell_refs = []
+          row_range = parts[2]..parts[4]
+            row_range.each do |row|
+              if parts[1].length == parts[3].length
+                col_range = parts[1]..parts[3]
+              else
+                col_range = (parts[1]..("Z"*parts[1].length)).to_a + (("A"*parts[3].length)..parts[3]).to_a
+              end
+            col_range.each do |col|
+              cell_refs << "#{col}#{row}"
+            end
+          end
+          cell_refs
+        else
+          []
+        end
+      end
+
     end
-    
+
 end
