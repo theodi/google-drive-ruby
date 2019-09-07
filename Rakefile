@@ -1,11 +1,12 @@
 require 'rake'
 require 'rake/testtask'
+require 'bundler/gem_tasks'
 
-task :default => [:test]
+task default: [:test]
 
-desc "Run unit tests"
-Rake::TestTask.new("test") { |t|
-  t.pattern = 'test/*.rb'
-  t.verbose = true
-  t.warning = true
-}
+desc 'Run unit tests'
+Rake::TestTask.new('test') do |t|
+  t.pattern = 'test/test_google_drive.rb'
+  t.verbose = false
+  t.warning = false
+end

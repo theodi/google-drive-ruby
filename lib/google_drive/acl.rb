@@ -3,113 +3,109 @@
 # Author: Hiroshi Ichikawa <http://gimite.net/>
 # The license of this source is "New BSD Licence"
 
-require "google_drive/acl_entry"
+require 'google_drive/acl_entry'
 
 module GoogleDrive
+  # ACL (access control list) of a spreadsheet.
+  #
+  # Use GoogleDrive::Spreadsheet#acl to get GoogleDrive::Acl object.
+  # See GoogleDrive::Spreadsheet#acl for usage example.
+  #
+  # This code is based on https://github.com/guyboertje/gdata-spreadsheet-ruby .
+  class Acl
+    include(Util)
+    include(Enumerable)
+    extend(Forwardable)
 
-    # ACL (access control list) of a spreadsheet.
-    #
-    # Use GoogleDrive::Spreadsheet#acl to get GoogleDrive::Acl object.
-    # See GoogleDrive::Spreadsheet#acl for usage example.
-    #
-    # This code is based on https://github.com/guyboertje/gdata-spreadsheet-ruby .
-    class Acl
-
-        include(Util)
-        extend(Forwardable)
-
-        def initialize(session, acls_feed_url) #:nodoc:
-          @session = session
-          @acls_feed_url = acls_feed_url
-          header = {"GData-Version" => "3.0"}
-          doc = @session.request(:get, @acls_feed_url, :header => header, :auth => :writely)
-          @acls = doc.css("entry").map(){ |e| AclEntry.new(entry_to_params(e)) }
-        end
-
-        def_delegators(:@acls, :size, :[], :each)
-
-        # Adds a new entry. +entry+ is either a GoogleDrive::AclEntry or a Hash with keys
-        # :scope_type, :scope and :role. See GoogleDrive::AclEntry#scope_type and
-        # GoogleDrive::AclEntry#role for the document of the fields.
-        #
-        # NOTE: This sends email to the new people.
-        #
-        # e.g.
-        #   # A specific user can read or write.
-        #   spreadsheet.acl.push(
-        #       {:scope_type => "user", :scope => "example2@gmail.com", :role => "reader"})
-        #   spreadsheet.acl.push(
-        #       {:scope_type => "user", :scope => "example3@gmail.com", :role => "writer"})
-        #   # Publish on the Web.
-        #   spreadsheet.acl.push(
-        #       {:scope_type => "default", :role => "reader"})
-        #   # Anyone who knows the link can read.
-        #   spreadsheet.acl.push(
-        #       {:scope_type => "default", :with_key => true, :role => "reader"})
-        def push(entry)
-
-          entry = AclEntry.new(entry) if entry.is_a?(Hash)
-
-          header = {"GData-Version" => "3.0", "Content-Type" => "application/atom+xml;charset=utf-8"}
-          doc = @session.request(
-              :post, @acls_feed_url, :data => entry.to_xml(), :header => header, :auth => :writely)
-
-          entry.params = entry_to_params(doc.root)
-          @acls.push(entry)
-          return entry
-
-        end
-
-        # Deletes an ACL entry.
-        #
-        # e.g.
-        #   spreadsheet.acl.delete(spreadsheet.acl[1])
-        def delete(entry)
-          header = {"GData-Version" => "3.0"}
-          @session.request(:delete, entry.edit_url_internal, :header => header, :auth => :writely)
-          @acls.delete(entry)
-        end
-
-        def update_role(entry) #:nodoc:
-
-          header = {"GData-Version" => "3.0", "Content-Type" => "application/atom+xml;charset=utf-8"}
-          doc = @session.request(
-              :put, entry.edit_url_internal, :data => entry.to_xml(), :header => header, :auth => :writely)
-
-          entry.params = entry_to_params(doc.root)
-          return entry
-
-        end
-
-        def inspect
-          return "\#<%p %p>" % [self.class, @acls]
-        end
-
-      private
-
-        def entry_to_params(entry)
-          
-          if !entry.css("gAcl|withKey").empty?
-            with_key = true
-            role = entry.css("gAcl|withKey gAcl|role")[0]["value"]
-          else
-            with_key = false
-            role = entry.css("gAcl|role")[0]["value"]
-          end
-
-          return {
-            :acl => self,
-            :scope_type => entry.css("gAcl|scope")[0]["type"],
-            :scope => entry.css("gAcl|scope")[0]["value"],
-            :with_key => with_key,
-            :role => role,
-            :title => entry.css("title").text,
-            :edit_url => entry.css("link[rel='edit']")[0]["href"],
-            :etag => entry["etag"],
-          }
-          
-        end
-
+    # @api private
+    def initialize(session, file)
+      @session = session
+      @file = file
+      api_permissions = @session.drive_service.list_permissions(
+        @file.id, fields: '*', supports_team_drives: true
+      )
+      @entries =
+        api_permissions.permissions.map { |perm| AclEntry.new(perm, self) }
     end
 
+    def_delegators(:@entries, :size, :[], :each)
+
+    # Adds a new entry. +entry+ is either a GoogleDrive::AclEntry or a Hash with
+    # keys +:type+, +:email_address+, +:domain+, +:role+ and
+    # +:allow_file_discovery+. See GoogleDrive::AclEntry#type and
+    # GoogleDrive::AclEntry#role for the document of the fields.
+    #
+    # Also you can pass the second hash argument +options+, which specifies
+    # optional query parameters for the API.
+    # Possible keys of +options+ are,
+    # * :email_message  -- A custom message to include in notification emails
+    # * :send_notification_email  -- Whether to send notification emails
+    #   when sharing to users or groups. (Default: true)
+    # * :transfer_ownership  -- Whether to transfer ownership to the specified
+    #   user and downgrade the current owner to a writer. This parameter is
+    #   required as an acknowledgement of the side effect. (Default: false)
+    #
+    # e.g.
+    #   # A specific user can read or write.
+    #   spreadsheet.acl.push(
+    #       {type: "user", email_address: "example2@gmail.com", role: "reader"})
+    #   spreadsheet.acl.push(
+    #       {type: "user", email_address: "example3@gmail.com", role: "writer"})
+    #   # Share with a Google Apps domain.
+    #   spreadsheet.acl.push(
+    #       {type: "domain", domain: "gimite.net", role: "reader"})
+    #   # Publish on the Web.
+    #   spreadsheet.acl.push(
+    #       {type: "anyone", role: "reader"})
+    #   # Anyone who knows the link can read.
+    #   spreadsheet.acl.push(
+    #       {type: "anyone", allow_file_discovery: false, role: "reader"})
+    #   # Set ACL without sending notification emails
+    #   spreadsheet.acl.push(
+    #       {type: "user", email_address: "example2@gmail.com", role: "reader"},
+    #       {send_notification_email: false})
+    #
+    # See here for parameter detais:
+    # https://developers.google.com/drive/v3/reference/permissions/create
+    def push(params_or_entry, options = {})
+      entry = params_or_entry.is_a?(AclEntry) ?
+        params_or_entry : AclEntry.new(params_or_entry)
+      api_permission = @session.drive_service.create_permission(
+        @file.id,
+        entry.params,
+        { fields: '*', supports_team_drives: true }.merge(options)
+      )
+      new_entry = AclEntry.new(api_permission, self)
+      @entries.push(new_entry)
+      new_entry
+    end
+
+    # Deletes an ACL entry.
+    #
+    # e.g.
+    #   spreadsheet.acl.delete(spreadsheet.acl[1])
+    def delete(entry)
+      @session.drive_service.delete_permission(
+        @file.id, entry.id, supports_team_drives: true
+      )
+      @entries.delete(entry)
+    end
+
+    # @api private
+    def update_role(entry)
+      api_permission = @session.drive_service.update_permission(
+        @file.id,
+        entry.id,
+        { role: entry.role },
+        fields: '*',
+        supports_team_drives: true
+      )
+      entry.api_permission = api_permission
+      entry
+    end
+
+    def inspect
+      format("\#<%p %p>", self.class, @entries)
+    end
+  end
 end
